@@ -27,7 +27,7 @@ class OnlineGameViewModel(
     private val localHostId: String = UUID.randomUUID().toString()
     private var localRoomPlayerId: String? = null
 
-    private val _phase = MutableStateFlow(GamePhase.Waiting)
+    private val _phase = MutableStateFlow(GamePhase.Lobby)
     val phase: StateFlow<GamePhase> = _phase
 
     private val _roomId = MutableStateFlow<String?>(null)
@@ -120,17 +120,18 @@ class OnlineGameViewModel(
         viewModelScope.launch {
             repository.observeRoom(roomId).collect {
                 val room = repository.findRoomByCode(_roomCode.value) ?: return@collect
-                if (room.status == "playing" && room.target_time != null) {
+                val isNewRound = _phase.value == GamePhase.Lobby || room.current_round != _currentRound.value
+                if (room.status == "playing" && room.target_time != null && isNewRound) {
                     _targetTime.value = room.target_time
                     _currentRound.value = room.current_round
-                    onGoSignalReceived()
+                    _phase.value = GamePhase.TargetReveal
                 }
             }
         }
     }
 
     /** Host-only: rolls a new target and flips the room to "playing", which all
-     * clients observe as the GO signal via Realtime. */
+     * clients (including the host) observe as the GO signal via Realtime. */
     fun startRound() {
         val roomId = _roomId.value ?: return
         viewModelScope.launch {
@@ -139,7 +140,22 @@ class OnlineGameViewModel(
         }
     }
 
-    private fun onGoSignalReceived() {
+    /** Host-only: starts the next round. Does not bump local state directly —
+     * the round number is only ever applied once Realtime echoes the DB update,
+     * so every device (including the host) detects it as a new round. */
+    fun nextRound() {
+        val roomId = _roomId.value ?: return
+        viewModelScope.launch {
+            val target = TimerUtil.round2(Random.nextDouble(config.minTime, config.maxTime))
+            repository.startRound(roomId, target, _currentRound.value + 1)
+        }
+    }
+
+    fun onTargetRevealFinished() {
+        _phase.value = GamePhase.Countdown
+    }
+
+    fun onCountdownFinished() {
         tapStartNanos = TimerUtil.now()
         _phase.value = GamePhase.Tapping
     }
@@ -202,8 +218,4 @@ class OnlineGameViewModel(
         }
     }
 
-    fun nextRound() {
-        _currentRound.value += 1
-        startRound()
-    }
 }

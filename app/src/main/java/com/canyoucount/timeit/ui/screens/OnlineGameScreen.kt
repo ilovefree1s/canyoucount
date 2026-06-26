@@ -11,25 +11,37 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.canyoucount.timeit.ui.components.CountdownDisplay
 import com.canyoucount.timeit.ui.components.HourglassAnimation
 import com.canyoucount.timeit.viewmodel.GamePhase
+import kotlinx.coroutines.delay
 
 /**
- * Online-mode equivalent of GameScreen. Target reveal/countdown are handled by
- * WaitingRoomScreen + the host's "Start Game" action; this screen covers the
- * Tapping and Waiting (State D) sub-states once the GO signal has fired.
+ * Online-mode equivalent of GameScreen: target reveal, countdown, tapping, and
+ * the post-tap "waiting for others" state, all driven by the room's Realtime-observed
+ * `status`/`target_time` columns (see OnlineGameViewModel.observeRoom).
  */
 @Composable
 fun OnlineGameScreen(
     phase: GamePhase,
     targetTime: Double,
+    onTargetRevealFinished: () -> Unit,
+    onCountdownFinished: () -> Unit,
     onTap: () -> Unit
 ) {
     Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         when (phase) {
+            GamePhase.TargetReveal -> TargetRevealContent(
+                targetTime = targetTime,
+                onFinished = onTargetRevealFinished
+            )
+
+            GamePhase.Countdown -> CountdownDisplay(onFinished = onCountdownFinished)
+
             GamePhase.Tapping -> Column(
                 modifier = Modifier.fillMaxSize().clickable { onTap() },
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -64,5 +76,27 @@ fun OnlineGameScreen(
                 Text(text = "Get ready…", style = MaterialTheme.typography.headlineMedium)
             }
         }
+    }
+}
+
+@Composable
+private fun TargetRevealContent(
+    targetTime: Double,
+    onFinished: () -> Unit
+) {
+    LaunchedEffect(targetTime) {
+        delay(3000)
+        onFinished()
+    }
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text(
+            text = "%.2f".format(targetTime),
+            style = MaterialTheme.typography.displayLarge
+        )
+        Text(text = "Remember this time", style = MaterialTheme.typography.bodyLarge)
     }
 }

@@ -1,6 +1,7 @@
 package com.canyoucount.timeit.ui
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateOf
@@ -142,14 +143,17 @@ fun TimeItNavGraph(navController: NavHostController = rememberNavController()) {
             val code by onlineViewModel.roomCode.collectAsState()
             val players by onlineViewModel.players.collectAsState()
             val isHost by onlineViewModel.isHost.collectAsState()
+            val phase by onlineViewModel.phase.collectAsState()
+            LaunchedEffect(phase) {
+                if (phase != GamePhase.Lobby) {
+                    navController.navigate(Routes.GAME_ONLINE) { popUpTo(Routes.WAITING_ROOM) { inclusive = true } }
+                }
+            }
             WaitingRoomScreen(
                 roomCode = code,
                 players = players,
                 isHost = isHost,
-                onStartGame = {
-                    onlineViewModel.startRound()
-                    navController.navigate(Routes.GAME_ONLINE) { popUpTo(Routes.WAITING_ROOM) { inclusive = true } }
-                }
+                onStartGame = { onlineViewModel.startRound() }
             )
         }
 
@@ -159,11 +163,15 @@ fun TimeItNavGraph(navController: NavHostController = rememberNavController()) {
             com.canyoucount.timeit.ui.screens.OnlineGameScreen(
                 phase = phase,
                 targetTime = targetTime,
+                onTargetRevealFinished = onlineViewModel::onTargetRevealFinished,
+                onCountdownFinished = onlineViewModel::onCountdownFinished,
                 onTap = onlineViewModel::onPlayerTap
             )
-            if (phase == GamePhase.Results || phase == GamePhase.Winner) {
-                val destination = if (phase == GamePhase.Winner) Routes.WINNER_ONLINE else Routes.RESULTS_ONLINE
-                navController.navigate(destination) { popUpTo(Routes.GAME_ONLINE) { inclusive = true } }
+            LaunchedEffect(phase) {
+                if (phase == GamePhase.Results || phase == GamePhase.Winner) {
+                    val destination = if (phase == GamePhase.Winner) Routes.WINNER_ONLINE else Routes.RESULTS_ONLINE
+                    navController.navigate(destination) { popUpTo(Routes.GAME_ONLINE) { inclusive = true } }
+                }
             }
         }
 
@@ -171,14 +179,17 @@ fun TimeItNavGraph(navController: NavHostController = rememberNavController()) {
             val players by onlineViewModel.players.collectAsState()
             val results by onlineViewModel.lastRoundResults.collectAsState()
             val isHost by onlineViewModel.isHost.collectAsState()
+            val phase by onlineViewModel.phase.collectAsState()
+            LaunchedEffect(phase) {
+                if (phase == GamePhase.TargetReveal) {
+                    navController.navigate(Routes.GAME_ONLINE) { popUpTo(Routes.RESULTS_ONLINE) { inclusive = true } }
+                }
+            }
             ResultsScreen(
                 players = players,
                 roundResults = results,
                 isHost = isHost,
-                onNextRound = {
-                    onlineViewModel.nextRound()
-                    navController.navigate(Routes.GAME_ONLINE) { popUpTo(Routes.RESULTS_ONLINE) { inclusive = true } }
-                },
+                onNextRound = { onlineViewModel.nextRound() },
                 onEndGame = {
                     navController.navigate(Routes.HOME) { popUpTo(Routes.HOME) { inclusive = true } }
                 }
