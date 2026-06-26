@@ -2,7 +2,9 @@ package com.canyoucount.timeit.data.repository
 
 import com.canyoucount.timeit.BuildConfig
 import com.canyoucount.timeit.data.model.GameConfig
+import com.canyoucount.timeit.data.model.PlayerWinsUpdate
 import com.canyoucount.timeit.data.model.RoomPlayerRow
+import com.canyoucount.timeit.data.model.RoomRoundUpdate
 import com.canyoucount.timeit.data.model.RoomRow
 import com.canyoucount.timeit.data.model.RoundResultRow
 import com.canyoucount.timeit.util.RoomCodeUtil
@@ -61,10 +63,10 @@ class SupabaseRepository {
     suspend fun startRound(roomId: String, targetTime: Double, round: Int) {
         client.from("rooms")
             .update(
-                mapOf(
-                    "status" to "playing",
-                    "target_time" to targetTime,
-                    "current_round" to round
+                RoomRoundUpdate(
+                    status = "playing",
+                    target_time = targetTime,
+                    current_round = round
                 )
             ) { filter { eq("id", roomId) } }
     }
@@ -84,7 +86,7 @@ class SupabaseRepository {
                 filter { eq("id", playerId) }
             }.decodeSingleOrNull<RoomPlayerRow>()?.let { player ->
                 client.from("room_players")
-                    .update(mapOf("wins" to player.wins + 1)) { filter { eq("id", playerId) } }
+                    .update(PlayerWinsUpdate(wins = player.wins + 1)) { filter { eq("id", playerId) } }
             }
         }
     }

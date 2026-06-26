@@ -34,3 +34,15 @@ data class RoundResultRow(
     val player_time: Double,
     val delta: Double
 )
+
+@Serializable
+data class RoomRoundUpdate(
+    val status: String,
+    val target_time: Double,
+    val current_round: Int
+)
+
+@Serializable
+data class PlayerWinsUpdate(
+    val wins: Int
+)
