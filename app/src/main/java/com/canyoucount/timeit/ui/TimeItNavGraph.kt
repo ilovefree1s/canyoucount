@@ -99,6 +99,7 @@ fun TimeItNavGraph(navController: NavHostController = rememberNavController()) {
             ResultsScreen(
                 players = state.players,
                 roundResults = results,
+                allResults = state.results,
                 isHost = true,
                 isTimeBankMode = state.config.gameMode == "timebank",
                 onNextRound = {
@@ -117,10 +118,21 @@ fun TimeItNavGraph(navController: NavHostController = rememberNavController()) {
                 state.players.filter { !it.eliminated }.maxByOrNull { it.bank }
                     ?: state.players.maxByOrNull { it.bank }
             } else {
-                state.players.maxByOrNull { it.wins }
+                // Standard: lowest average absolute delta across all rounds
+                state.players.minByOrNull { player ->
+                    val playerResults = state.results.filter { it.playerId == player.id }
+                    if (playerResults.isEmpty()) Double.MAX_VALUE
+                    else playerResults.map { kotlin.math.abs(it.delta) }.average()
+                }
             }
+            val winnerAvgDelta = if (state.config.gameMode == "standard" && winner != null) {
+                val playerResults = state.results.filter { it.playerId == winner.id }
+                if (playerResults.isEmpty()) null
+                else playerResults.map { kotlin.math.abs(it.delta) }.average()
+            } else null
             WinnerScreen(
                 winnerName = winner?.name ?: "",
+                winnerAvgDelta = winnerAvgDelta,
                 onPlayAgain = {
                     gameViewModel.playAgain()
                     navController.navigate(Routes.GAME_LOCAL) { popUpTo(Routes.WINNER_LOCAL) { inclusive = true } }

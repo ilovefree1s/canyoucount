@@ -119,22 +119,19 @@ class GameViewModel : ViewModel() {
                 } else player
             }
         } else {
-            val minAbsDelta = roundResults.minOf { kotlin.math.abs(it.delta) }
-            val roundWinnerIds = roundResults
-                .filter { kotlin.math.abs(it.delta) == minAbsDelta }
-                .map { it.playerId }
-            _gameState.value.players.map { player ->
-                if (player.id in roundWinnerIds) player.copy(wins = player.wins + 1) else player
-            }
+            _gameState.value.players
         }
 
+        val allResults = _gameState.value.results + roundResults
+        val currentRound = _gameState.value.currentRound
+
         _gameState.update {
-            it.copy(players = updatedPlayers, results = it.results + roundResults)
+            it.copy(players = updatedPlayers, results = allResults)
         }
 
         _phase.value = when {
             config.gameMode == "timebank" && updatedPlayers.count { !it.eliminated } <= 1 -> GamePhase.Winner
-            config.gameMode == "standard" && updatedPlayers.any { it.wins >= config.winTarget } -> GamePhase.Winner
+            config.gameMode == "standard" && currentRound >= config.winTarget -> GamePhase.Winner
             else -> GamePhase.Results
         }
     }

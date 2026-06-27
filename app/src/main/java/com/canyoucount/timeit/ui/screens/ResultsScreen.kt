@@ -26,6 +26,7 @@ import com.canyoucount.timeit.ui.theme.AccentRed
 fun ResultsScreen(
     players: List<Player>,
     roundResults: List<RoundResult>,
+    allResults: List<RoundResult> = emptyList(),
     isHost: Boolean = true,
     isTimeBankMode: Boolean = false,
     onReady: (() -> Unit)? = null,
@@ -46,11 +47,14 @@ fun ResultsScreen(
 
         sortedResults.forEach { result ->
             val player = players.find { it.id == result.playerId }
+            val playerAllResults = allResults.filter { it.playerId == result.playerId }
+            val avgDelta = if (playerAllResults.isEmpty()) null
+                else playerAllResults.map { kotlin.math.abs(it.delta) }.average()
             PlayerResultRow(
                 playerName = player?.name ?: "Unknown",
                 playerTime = result.playerTime,
                 delta = result.delta,
-                wins = player?.wins ?: 0,
+                avgDelta = avgDelta,
                 isRoundWinner = minAbsDelta != null && kotlin.math.abs(result.delta) == minAbsDelta
             )
             if (isTimeBankMode && player != null) {

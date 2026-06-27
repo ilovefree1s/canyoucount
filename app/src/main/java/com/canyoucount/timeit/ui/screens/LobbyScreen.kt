@@ -74,10 +74,10 @@ fun LobbyScreen(
         if (gameMode == "standard") {
             Box {
                 Button(onClick = { winTargetMenuExpanded = true }) {
-                    Text("Win target: $winTarget round(s)")
+                    Text("Rounds: $winTarget")
                 }
                 DropdownMenu(expanded = winTargetMenuExpanded, onDismissRequest = { winTargetMenuExpanded = false }) {
-                    listOf(1, 3, 5, 7, 10).forEach { option ->
+                    listOf(3, 5, 7, 10).forEach { option ->
                         DropdownMenuItem(text = { Text(option.toString()) }, onClick = {
                             winTarget = option
                             winTargetMenuExpanded = false

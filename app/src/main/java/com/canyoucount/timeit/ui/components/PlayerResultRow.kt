@@ -21,7 +21,7 @@ fun PlayerResultRow(
     playerName: String,
     playerTime: Double,
     delta: Double,
-    wins: Int,
+    avgDelta: Double? = null,
     isRoundWinner: Boolean,
     modifier: Modifier = Modifier
 ) {
@@ -39,20 +39,30 @@ fun PlayerResultRow(
         ) {
             Text(
                 text = if (isRoundWinner) "★ $playerName" else playerName,
-                style = MaterialTheme.typography.bodyLarge,
+                style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold),
                 color = if (isRoundWinner) AccentGreen else MaterialTheme.colorScheme.onSurface
             )
+            if (avgDelta != null) {
+                Text(
+                    text = "Avg: %.2fs".format(avgDelta),
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                )
+            }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
             Text(
                 text = "%.2fs".format(playerTime),
-                style = MaterialTheme.typography.bodyLarge
+                style = MaterialTheme.typography.headlineSmall,
+                color = SandAmber
             )
             Text(
                 text = "%+.2fs".format(delta),
-                style = MaterialTheme.typography.bodyLarge
-            )
-            Text(
-                text = "Wins: $wins",
-                style = MaterialTheme.typography.bodyLarge
+                style = MaterialTheme.typography.headlineSmall,
+                color = if (absDelta <= 0.3) AccentGreen else if (absDelta >= 1.0) AccentRed else MaterialTheme.colorScheme.onSurface
             )
         }
         if (isGodOfTime) {

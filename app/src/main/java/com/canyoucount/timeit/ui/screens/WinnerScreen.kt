@@ -17,6 +17,7 @@ import com.canyoucount.timeit.ui.theme.SandAmber
 @Composable
 fun WinnerScreen(
     winnerName: String,
+    winnerAvgDelta: Double? = null,
     onPlayAgain: () -> Unit,
     onHome: () -> Unit
 ) {
@@ -31,6 +32,13 @@ fun WinnerScreen(
             style = MaterialTheme.typography.headlineMedium,
             color = SandAmber
         )
+        if (winnerAvgDelta != null) {
+            Text(
+                text = "Avg error: %.2fs".format(winnerAvgDelta),
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+            )
+        }
 
         Column(
             modifier = Modifier.fillMaxWidth().padding(top = 48.dp),
