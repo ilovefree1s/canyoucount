@@ -43,7 +43,9 @@ class GameViewModel : ViewModel() {
     private val pendingTimes = mutableMapOf<String, Double>()
 
     fun startGame(playerNames: List<String>, config: GameConfig = GameConfig()) {
-        val players = playerNames.map { Player(id = RoomCodeUtil.generate(), name = it) }
+        val players = playerNames.map {
+            Player(id = RoomCodeUtil.generate(), name = it, bank = config.timeBankSeconds)
+        }
         _gameState.value = GameState(
             config = config,
             players = players,
@@ -64,8 +66,11 @@ class GameViewModel : ViewModel() {
         _phase.value = GamePhase.Countdown
     }
 
-    fun onCountdownFinished() {
+    fun onCountdownGo() {
         tapStartNanos = TimerUtil.now()
+    }
+
+    fun onCountdownFinished() {
         _phase.value = GamePhase.Tapping
     }
 
@@ -76,8 +81,8 @@ class GameViewModel : ViewModel() {
         val elapsed = TimerUtil.round2(TimerUtil.elapsedSeconds(tapStartNanos))
         pendingTimes[currentPlayer.id] = elapsed
 
-        val nextIndex = _currentPlayerIndex.value + 1
-        if (nextIndex < players.size) {
+        val nextIndex = nextActivePlayers(players, _currentPlayerIndex.value + 1)
+        if (nextIndex != -1) {
             _currentPlayerIndex.value = nextIndex
             _phase.value = GamePhase.TargetReveal
         } else {
@@ -85,8 +90,16 @@ class GameViewModel : ViewModel() {
         }
     }
 
+    private fun nextActivePlayers(players: List<Player>, fromIndex: Int): Int {
+        for (i in fromIndex until players.size) {
+            if (!players[i].eliminated) return i
+        }
+        return -1
+    }
+
     private fun finishRound() {
         val target = _targetTime.value
+        val config = _gameState.value.config
         val roundResults = pendingTimes.map { (playerId, time) ->
             RoundResult(
                 playerId = playerId,
@@ -97,39 +110,49 @@ class GameViewModel : ViewModel() {
         }
         _lastRoundResults.value = roundResults
 
-        val minAbsDelta = roundResults.minOf { kotlin.math.abs(it.delta) }
-        val roundWinnerIds = roundResults
-            .filter { kotlin.math.abs(it.delta) == minAbsDelta }
-            .map { it.playerId }
-
-        val updatedPlayers = _gameState.value.players.map { player ->
-            if (player.id in roundWinnerIds) player.copy(wins = player.wins + 1) else player
+        val updatedPlayers = if (config.gameMode == "timebank") {
+            _gameState.value.players.map { player ->
+                val result = roundResults.find { it.playerId == player.id }
+                if (result != null) {
+                    val newBank = TimerUtil.round2(player.bank - kotlin.math.abs(result.delta))
+                    player.copy(bank = newBank, eliminated = newBank <= 0.0)
+                } else player
+            }
+        } else {
+            val minAbsDelta = roundResults.minOf { kotlin.math.abs(it.delta) }
+            val roundWinnerIds = roundResults
+                .filter { kotlin.math.abs(it.delta) == minAbsDelta }
+                .map { it.playerId }
+            _gameState.value.players.map { player ->
+                if (player.id in roundWinnerIds) player.copy(wins = player.wins + 1) else player
+            }
         }
 
         _gameState.update {
-            it.copy(
-                players = updatedPlayers,
-                results = it.results + roundResults
-            )
+            it.copy(players = updatedPlayers, results = it.results + roundResults)
         }
 
-        _phase.value = if (updatedPlayers.any { it.wins >= _gameState.value.config.winTarget }) {
-            GamePhase.Winner
-        } else {
-            GamePhase.Results
+        _phase.value = when {
+            config.gameMode == "timebank" && updatedPlayers.count { !it.eliminated } <= 1 -> GamePhase.Winner
+            config.gameMode == "standard" && updatedPlayers.any { it.wins >= config.winTarget } -> GamePhase.Winner
+            else -> GamePhase.Results
         }
     }
 
     fun startNextRound() {
         pendingTimes.clear()
-        _currentPlayerIndex.value = 0
+        val firstActive = nextActivePlayers(_gameState.value.players, 0)
+        _currentPlayerIndex.value = if (firstActive != -1) firstActive else 0
         _gameState.update { it.copy(currentRound = it.currentRound + 1) }
         rollTargetTime()
         _phase.value = GamePhase.TargetReveal
     }
 
     fun playAgain() {
-        val resetPlayers = _gameState.value.players.map { it.copy(wins = 0) }
+        val config = _gameState.value.config
+        val resetPlayers = _gameState.value.players.map {
+            it.copy(wins = 0, bank = config.timeBankSeconds, eliminated = false)
+        }
         _gameState.update {
             it.copy(players = resetPlayers, currentRound = 1, results = emptyList())
         }

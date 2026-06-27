@@ -22,8 +22,12 @@ data class RoomPlayerRow(
     val id: String? = null,
     val room_id: String,
     val player_name: String,
-    val wins: Int = 0
+    val wins: Int = 0,
+    val ready: Boolean = false
 )
+
+@Serializable
+data class PlayerReadyUpdate(val ready: Boolean)
 
 @Serializable
 data class RoundResultRow(

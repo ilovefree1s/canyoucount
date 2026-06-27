@@ -17,7 +17,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.canyoucount.timeit.ui.components.CountdownDisplay
-import com.canyoucount.timeit.ui.components.HourglassAnimation
 import com.canyoucount.timeit.viewmodel.GamePhase
 import com.canyoucount.timeit.viewmodel.GameViewModel
 import kotlinx.coroutines.delay
@@ -51,7 +50,10 @@ fun GameScreen(
                 playerName = currentPlayerName,
                 onFinished = viewModel::onTargetRevealFinished
             )
-            GamePhase.Countdown -> CountdownDisplay(onFinished = viewModel::onCountdownFinished)
+            GamePhase.Countdown -> CountdownDisplay(
+                onGo = viewModel::onCountdownGo,
+                onFinished = viewModel::onCountdownFinished
+            )
             GamePhase.Tapping -> TappingContent(onTap = viewModel::onPlayerTap)
             else -> Unit
         }
@@ -92,7 +94,6 @@ private fun TappingContent(onTap: () -> Unit) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        HourglassAnimation(frozen = false)
         Text(
             text = "Tap anywhere to stop",
             style = MaterialTheme.typography.labelSmall,

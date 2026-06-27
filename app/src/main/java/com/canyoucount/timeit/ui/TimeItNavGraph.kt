@@ -6,26 +6,34 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.canyoucount.timeit.data.model.GameConfig
 import com.canyoucount.timeit.ui.screens.GameScreen
 import com.canyoucount.timeit.ui.screens.HomeScreen
 import com.canyoucount.timeit.ui.screens.JoinRoomScreen
 import com.canyoucount.timeit.ui.screens.LobbyScreen
 import com.canyoucount.timeit.ui.screens.OnlineMenuScreen
 import com.canyoucount.timeit.ui.screens.ResultsScreen
+import com.canyoucount.timeit.ui.screens.SinglePlayerScreen
 import com.canyoucount.timeit.ui.screens.WaitingRoomScreen
 import com.canyoucount.timeit.ui.screens.WinnerScreen
+import com.canyoucount.timeit.util.PlayerNameStore
 import com.canyoucount.timeit.viewmodel.GamePhase
 import com.canyoucount.timeit.viewmodel.GameViewModel
 import com.canyoucount.timeit.viewmodel.OnlineGameViewModel
+import com.canyoucount.timeit.viewmodel.SinglePlayerViewModel
+import kotlinx.coroutines.launch
 
 private object Routes {
     const val HOME = "home"
+    const val SINGLE_PLAYER = "single_player"
     const val LOBBY = "lobby"
     const val GAME_LOCAL = "game_local"
     const val RESULTS_LOCAL = "results_local"
@@ -43,13 +51,27 @@ private object Routes {
 fun TimeItNavGraph(navController: NavHostController = rememberNavController()) {
     val gameViewModel: GameViewModel = viewModel()
     val onlineViewModel: OnlineGameViewModel = viewModel()
+    val singlePlayerViewModel: SinglePlayerViewModel = viewModel()
 
     NavHost(navController = navController, startDestination = Routes.HOME) {
 
         composable(Routes.HOME) {
             HomeScreen(
+                onSinglePlayer = {
+                    singlePlayerViewModel.restart()
+                    navController.navigate(Routes.SINGLE_PLAYER)
+                },
                 onPassAndPlay = { navController.navigate(Routes.LOBBY) },
                 onPlayOnline = { navController.navigate(Routes.ONLINE_MENU) }
+            )
+        }
+
+        composable(Routes.SINGLE_PLAYER) {
+            SinglePlayerScreen(
+                viewModel = singlePlayerViewModel,
+                onHome = {
+                    navController.navigate(Routes.HOME) { popUpTo(Routes.HOME) { inclusive = true } }
+                }
             )
         }
 
@@ -78,6 +100,7 @@ fun TimeItNavGraph(navController: NavHostController = rememberNavController()) {
                 players = state.players,
                 roundResults = results,
                 isHost = true,
+                isTimeBankMode = state.config.gameMode == "timebank",
                 onNextRound = {
                     gameViewModel.startNextRound()
                     navController.navigate(Routes.GAME_LOCAL) { popUpTo(Routes.RESULTS_LOCAL) { inclusive = true } }
@@ -90,7 +113,12 @@ fun TimeItNavGraph(navController: NavHostController = rememberNavController()) {
 
         composable(Routes.WINNER_LOCAL) {
             val state by gameViewModel.gameState.collectAsState()
-            val winner = state.players.maxByOrNull { it.wins }
+            val winner = if (state.config.gameMode == "timebank") {
+                state.players.filter { !it.eliminated }.maxByOrNull { it.bank }
+                    ?: state.players.maxByOrNull { it.bank }
+            } else {
+                state.players.maxByOrNull { it.wins }
+            }
             WinnerScreen(
                 winnerName = winner?.name ?: "",
                 onPlayAgain = {
@@ -111,21 +139,28 @@ fun TimeItNavGraph(navController: NavHostController = rememberNavController()) {
         }
 
         composable(Routes.HOST_NAME) {
-            var hostName by remember { mutableStateOf("") }
+            val context = LocalContext.current
+            val scope = rememberCoroutineScope()
+            val savedName by PlayerNameStore.getName(context).collectAsState(initial = "")
+            var hostName by remember(savedName) { mutableStateOf(savedName) }
             val error by onlineViewModel.errorMessage.collectAsState()
             com.canyoucount.timeit.ui.screens.HostNameScreen(
                 playerName = hostName,
                 onPlayerNameChange = { hostName = it },
                 errorMessage = error,
-                onHost = {
-                    onlineViewModel.hostGame(hostName)
+                onHost = { winTarget, gameMode, timeBankSeconds ->
+                    scope.launch { PlayerNameStore.saveName(context, hostName) }
+                    onlineViewModel.hostGame(hostName, GameConfig(winTarget = winTarget, gameMode = gameMode, timeBankSeconds = timeBankSeconds))
                     navController.navigate(Routes.WAITING_ROOM) { popUpTo(Routes.ONLINE_MENU) }
                 }
             )
         }
 
         composable(Routes.JOIN_ROOM) {
-            var playerName by remember { mutableStateOf("") }
+            val context = LocalContext.current
+            val scope = rememberCoroutineScope()
+            val savedName by PlayerNameStore.getName(context).collectAsState(initial = "")
+            var playerName by remember(savedName) { mutableStateOf(savedName) }
             val error by onlineViewModel.errorMessage.collectAsState()
             JoinRoomScreen(
                 playerName = playerName,
@@ -133,6 +168,7 @@ fun TimeItNavGraph(navController: NavHostController = rememberNavController()) {
                 isJoining = false,
                 errorMessage = error,
                 onJoinRoom = { code ->
+                    scope.launch { PlayerNameStore.saveName(context, playerName) }
                     onlineViewModel.joinGame(playerName, code)
                     navController.navigate(Routes.WAITING_ROOM) { popUpTo(Routes.ONLINE_MENU) }
                 }
@@ -164,6 +200,7 @@ fun TimeItNavGraph(navController: NavHostController = rememberNavController()) {
                 phase = phase,
                 targetTime = targetTime,
                 onTargetRevealFinished = onlineViewModel::onTargetRevealFinished,
+                onCountdownGo = onlineViewModel::onCountdownGo,
                 onCountdownFinished = onlineViewModel::onCountdownFinished,
                 onTap = onlineViewModel::onPlayerTap
             )
@@ -180,15 +217,24 @@ fun TimeItNavGraph(navController: NavHostController = rememberNavController()) {
             val results by onlineViewModel.lastRoundResults.collectAsState()
             val isHost by onlineViewModel.isHost.collectAsState()
             val phase by onlineViewModel.phase.collectAsState()
+            val allReady = players.isNotEmpty() && players.all { it.ready }
             LaunchedEffect(phase) {
                 if (phase == GamePhase.TargetReveal) {
                     navController.navigate(Routes.GAME_ONLINE) { popUpTo(Routes.RESULTS_ONLINE) { inclusive = true } }
                 }
             }
+            LaunchedEffect(allReady) {
+                if (allReady && isHost) {
+                    onlineViewModel.nextRound()
+                }
+            }
+            val gameMode by onlineViewModel.gameMode.collectAsState()
             ResultsScreen(
                 players = players,
                 roundResults = results,
                 isHost = isHost,
+                isTimeBankMode = gameMode == "timebank",
+                onReady = onlineViewModel::markReady,
                 onNextRound = { onlineViewModel.nextRound() },
                 onEndGame = {
                     navController.navigate(Routes.HOME) { popUpTo(Routes.HOME) { inclusive = true } }

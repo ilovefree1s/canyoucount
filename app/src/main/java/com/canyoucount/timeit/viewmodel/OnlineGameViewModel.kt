@@ -7,10 +7,13 @@ import com.canyoucount.timeit.data.model.Player
 import com.canyoucount.timeit.data.model.RoundResult
 import com.canyoucount.timeit.data.repository.SupabaseRepository
 import com.canyoucount.timeit.util.TimerUtil
+import io.github.jan.supabase.realtime.RealtimeChannel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlin.random.Random
 import java.util.UUID
 
@@ -55,8 +58,13 @@ class OnlineGameViewModel(
     private var config: GameConfig = GameConfig()
     private var tapStartNanos: Long = 0L
 
+    private val _gameMode = MutableStateFlow("standard")
+    val gameMode: StateFlow<String> = _gameMode
+    private val activeChannels = mutableListOf<RealtimeChannel>()
+
     fun hostGame(playerName: String, gameConfig: GameConfig = GameConfig()) {
         config = gameConfig
+        _gameMode.value = gameConfig.gameMode
         viewModelScope.launch {
             try {
                 repository.connectRealtime()
@@ -90,6 +98,7 @@ class OnlineGameViewModel(
                 _roomCode.value = room.code
                 _isHost.value = false
                 config = room.config
+                _gameMode.value = room.config.gameMode
                 refreshPlayers()
                 observeRoom()
                 observePlayers()
@@ -101,16 +110,38 @@ class OnlineGameViewModel(
 
     private suspend fun refreshPlayers() {
         val roomId = _roomId.value ?: return
+        val existing = _players.value.associateBy { it.id }
         _players.value = repository.listPlayers(roomId).map {
-            Player(id = it.id ?: "", name = it.player_name, wins = it.wins)
+            val prev = existing[it.id ?: ""]
+            Player(
+                id = it.id ?: "",
+                name = it.player_name,
+                wins = it.wins,
+                ready = it.ready,
+                bank = prev?.bank ?: 1.0,
+                eliminated = prev?.eliminated ?: false
+            )
+        }
+    }
+
+    fun markReady() {
+        val playerId = localRoomPlayerId ?: return
+        viewModelScope.launch {
+            runCatching { repository.markReady(playerId) }
         }
     }
 
     private fun observePlayers() {
         val roomId = _roomId.value ?: return
         viewModelScope.launch {
-            repository.observePlayers(roomId).collect {
-                refreshPlayers()
+            while (isActive) {
+                runCatching {
+                    val (channel, flow) = repository.observePlayers(roomId)
+                    activeChannels.add(channel)
+                    flow.collect { refreshPlayers() }
+                    activeChannels.remove(channel)
+                }
+                if (isActive) delay(2000)
             }
         }
     }
@@ -118,15 +149,32 @@ class OnlineGameViewModel(
     private fun observeRoom() {
         val roomId = _roomId.value ?: return
         viewModelScope.launch {
-            repository.observeRoom(roomId).collect {
-                val room = repository.findRoomByCode(_roomCode.value) ?: return@collect
-                val isNewRound = _phase.value == GamePhase.Lobby || room.current_round != _currentRound.value
-                if (room.status == "playing" && room.target_time != null && isNewRound) {
-                    _targetTime.value = room.target_time
-                    _currentRound.value = room.current_round
-                    _phase.value = GamePhase.TargetReveal
+            while (isActive) {
+                runCatching {
+                    val (channel, flow) = repository.observeRoom(roomId)
+                    activeChannels.add(channel)
+                    flow.collect {
+                        val room = repository.findRoomByCode(_roomCode.value) ?: return@collect
+                        val isNewRound = _phase.value == GamePhase.Lobby || room.current_round != _currentRound.value
+                        if (room.status == "playing" && room.target_time != null && isNewRound) {
+                            _targetTime.value = room.target_time
+                            _currentRound.value = room.current_round
+                            _phase.value = GamePhase.TargetReveal
+                        }
+                    }
+                    activeChannels.remove(channel)
                 }
+                if (isActive) delay(2000)
             }
+        }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        runBlocking {
+            activeChannels.forEach { runCatching { repository.unsubscribeChannel(it) } }
+            activeChannels.clear()
+            runCatching { repository.disconnectRealtime() }
         }
     }
 
@@ -146,6 +194,7 @@ class OnlineGameViewModel(
     fun nextRound() {
         val roomId = _roomId.value ?: return
         viewModelScope.launch {
+            runCatching { repository.resetReady(roomId) }
             val target = TimerUtil.round2(Random.nextDouble(config.minTime, config.maxTime))
             repository.startRound(roomId, target, _currentRound.value + 1)
         }
@@ -155,8 +204,11 @@ class OnlineGameViewModel(
         _phase.value = GamePhase.Countdown
     }
 
-    fun onCountdownFinished() {
+    fun onCountdownGo() {
         tapStartNanos = TimerUtil.now()
+    }
+
+    fun onCountdownFinished() {
         _phase.value = GamePhase.Tapping
     }
 
@@ -182,39 +234,76 @@ class OnlineGameViewModel(
     private suspend fun awaitAllResultsOrTimeout() {
         val roomId = _roomId.value ?: return
         val deadline = System.currentTimeMillis() + 30_000
-        while (System.currentTimeMillis() < deadline) {
-            val results = repository.listResults(roomId, _currentRound.value)
-            if (results.size >= _players.value.size) break
-            delay(500)
+        val expectedCount = _players.value.count { !it.eliminated }
+        try {
+            while (System.currentTimeMillis() < deadline) {
+                val results = repository.listResults(roomId, _currentRound.value)
+                if (results.size >= expectedCount) break
+                delay(500)
+            }
+        } catch (e: Exception) {
+            // timeout or network error — proceed to finishRound with whatever results exist
         }
         finishRound()
     }
 
     private suspend fun finishRound() {
         val roomId = _roomId.value ?: return
-        val rows = repository.listResults(roomId, _currentRound.value)
-        val target = _targetTime.value
-        val results = rows.map {
-            RoundResult(
-                playerId = it.player_id,
-                targetTime = target,
-                playerTime = it.player_time,
-                delta = it.delta
-            )
-        }
-        _lastRoundResults.value = results
+        try {
+            val rows = repository.listResults(roomId, _currentRound.value)
+            val target = _targetTime.value
+            val results = rows.map {
+                RoundResult(
+                    playerId = it.player_id,
+                    targetTime = target,
+                    playerTime = it.player_time,
+                    delta = it.delta
+                )
+            }
+            _lastRoundResults.value = results
 
-        val minAbsDelta = results.minOfOrNull { kotlin.math.abs(it.delta) }
-        val roundWinnerIds = results.filter { kotlin.math.abs(it.delta) == minAbsDelta }.map { it.playerId }
-        if (_isHost.value) {
-            repository.incrementWins(roundWinnerIds)
+            if (config.gameMode == "timebank") {
+                finishTimeBankRound(roomId)
+            } else {
+                if (results.isNotEmpty()) {
+                    val minAbsDelta = results.minOf { kotlin.math.abs(it.delta) }
+                    val roundWinnerIds = results
+                        .filter { kotlin.math.abs(it.delta) == minAbsDelta }
+                        .map { it.playerId }
+                    if (_isHost.value) {
+                        runCatching { repository.incrementWins(roundWinnerIds) }
+                    }
+                }
+                runCatching { refreshPlayers() }
+                _phase.value = if (_players.value.any { it.wins >= config.winTarget }) {
+                    GamePhase.Winner
+                } else {
+                    GamePhase.Results
+                }
+            }
+        } catch (e: Exception) {
+            _errorMessage.value = "Round error: ${e.message}"
+            _phase.value = GamePhase.Results
         }
-        refreshPlayers()
+    }
 
-        _phase.value = if (_players.value.any { it.wins >= config.winTarget }) {
-            GamePhase.Winner
-        } else {
-            GamePhase.Results
+    private suspend fun finishTimeBankRound(roomId: String) {
+        val allRows = repository.listAllResults(roomId)
+
+        // compute each player's remaining bank from all results so far
+        val updatedPlayers = _players.value.map { player ->
+            val totalDelta = allRows
+                .filter { it.player_id == player.id }
+                .sumOf { kotlin.math.abs(it.delta) }
+            val remaining = TimerUtil.round2(config.timeBankSeconds - totalDelta)
+            player.copy(bank = remaining, eliminated = remaining <= 0.0)
+        }
+        _players.value = updatedPlayers
+
+        val alive = updatedPlayers.filter { !it.eliminated }
+        _phase.value = when {
+            alive.size <= 1 -> GamePhase.Winner
+            else -> GamePhase.Results
         }
     }
 

@@ -1,2 +1,3 @@
-# CanYouCount
-Challenging you to count with me
+# TIME IT!
+do you know time?
+
