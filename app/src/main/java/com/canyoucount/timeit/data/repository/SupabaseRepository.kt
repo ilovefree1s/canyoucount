@@ -3,6 +3,7 @@ package com.canyoucount.timeit.data.repository
 import com.canyoucount.timeit.BuildConfig
 import com.canyoucount.timeit.data.model.GameConfig
 import com.canyoucount.timeit.data.model.PlayerReadyUpdate
+import com.canyoucount.timeit.data.model.PlayerTeamUpdate
 import com.canyoucount.timeit.data.model.PlayerWinsUpdate
 import com.canyoucount.timeit.data.model.RoomPlayerRow
 import com.canyoucount.timeit.data.model.RoomRoundUpdate
@@ -133,6 +134,16 @@ class SupabaseRepository {
 
     suspend fun unsubscribeChannel(channel: RealtimeChannel) {
         runCatching { channel.unsubscribe() }
+    }
+
+    suspend fun resetPlayerWins(roomId: String) {
+        client.from("room_players")
+            .update(PlayerWinsUpdate(wins = 0)) { filter { eq("room_id", roomId) } }
+    }
+
+    suspend fun updatePlayerTeam(playerId: String, teamId: Int) {
+        client.from("room_players")
+            .update(PlayerTeamUpdate(team_id = teamId)) { filter { eq("id", playerId) } }
     }
 
     suspend fun markReady(playerId: String) {

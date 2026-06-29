@@ -5,7 +5,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -21,6 +24,7 @@ import com.canyoucount.timeit.data.model.RoundResult
 import com.canyoucount.timeit.ui.components.PlayerResultRow
 import com.canyoucount.timeit.ui.theme.AccentGreen
 import com.canyoucount.timeit.ui.theme.AccentRed
+import com.canyoucount.timeit.util.RoastMessages
 
 @Composable
 fun ResultsScreen(
@@ -29,6 +33,9 @@ fun ResultsScreen(
     allResults: List<RoundResult> = emptyList(),
     isHost: Boolean = true,
     isTimeBankMode: Boolean = false,
+    isSurvivalMode: Boolean = false,
+    isTeamMode: Boolean = false,
+    isGameOver: Boolean = false,
     onReady: (() -> Unit)? = null,
     onNextRound: () -> Unit,
     onEndGame: () -> Unit
@@ -45,50 +52,119 @@ fun ResultsScreen(
     ) {
         Text(text = "Round Results", style = MaterialTheme.typography.headlineMedium)
 
-        sortedResults.forEach { result ->
-            val player = players.find { it.id == result.playerId }
-            val playerAllResults = allResults.filter { it.playerId == result.playerId }
-            val avgDelta = if (playerAllResults.isEmpty()) null
-                else playerAllResults.map { kotlin.math.abs(it.delta) }.average()
-            PlayerResultRow(
-                playerName = player?.name ?: "Unknown",
-                playerTime = result.playerTime,
-                delta = result.delta,
-                avgDelta = avgDelta,
-                isRoundWinner = minAbsDelta != null && kotlin.math.abs(result.delta) == minAbsDelta
-            )
-            if (isTimeBankMode && player != null) {
-                if (player.eliminated) {
+        val teamLabels = listOf("A", "B", "C", "D")
+
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            if (isTeamMode) {
+                val teamIds = players.map { it.teamId }.distinct().sorted()
+                // Best team = lowest avg delta this round
+                val bestTeamId = teamIds.minByOrNull { tid ->
+                    val teamResults = sortedResults.filter { res -> players.any { it.teamId == tid && it.id == res.playerId } }
+                    if (teamResults.isEmpty()) Double.MAX_VALUE else teamResults.map { kotlin.math.abs(it.delta) }.average()
+                }
+                teamIds.forEach { teamId ->
+                    val teamResults = sortedResults.filter { res -> players.any { it.teamId == teamId && it.id == res.playerId } }
+                    val teamAvg = if (teamResults.isEmpty()) null else teamResults.map { kotlin.math.abs(it.delta) }.average()
+                    val teamEliminated = isTimeBankMode && players.filter { it.teamId == teamId }.all { it.eliminated }
+                    val isWinningTeam = teamId == bestTeamId
+
                     Text(
-                        text = "💀 ELIMINATED",
-                        style = MaterialTheme.typography.bodyLarge.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.Bold),
-                        color = AccentRed
+                        text = buildString {
+                            append(if (isWinningTeam) "★ " else "")
+                            append("Team ${teamLabels.getOrElse(teamId - 1) { "?" }}")
+                            if (teamAvg != null) append("  —  %.2fs avg".format(teamAvg))
+                            if (teamEliminated) append("  💀")
+                        },
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontWeight = if (isWinningTeam) androidx.compose.ui.text.font.FontWeight.Bold else androidx.compose.ui.text.font.FontWeight.Normal
+                        ),
+                        color = if (teamEliminated) AccentRed else if (isWinningTeam) AccentGreen else MaterialTheme.colorScheme.onSurface
                     )
-                } else {
-                    Text(
-                        text = "Bank: %.2fs remaining".format(player.bank),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = if (player.bank < 0.3) AccentRed else AccentGreen
+                    if (isTimeBankMode) {
+                        val teamBank = players.filter { it.teamId == teamId }.minOfOrNull { it.bank } ?: 0.0
+                        Text(
+                            text = if (teamEliminated) "Bank depleted" else "Bank: %.2fs remaining".format(teamBank),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (teamEliminated || teamBank < 0.3) AccentRed else AccentGreen
+                        )
+                    }
+                    teamResults.forEach { result ->
+                        val player = players.find { it.id == result.playerId }
+                        val absDelta = kotlin.math.abs(result.delta)
+                        val roast = remember(result.playerId) { if (absDelta > 2.0) RoastMessages.random(result.targetTime, absDelta) else null }
+                        PlayerResultRow(
+                            playerName = player?.name ?: "Unknown",
+                            playerTime = result.playerTime,
+                            delta = result.delta,
+                            isRoundWinner = false,
+                            isEliminated = isTimeBankMode && player?.eliminated == true,
+                            modifier = Modifier.padding(start = 16.dp)
+                        )
+                        if (roast != null) {
+                            Text(
+                                text = roast,
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.Bold),
+                                color = AccentRed,
+                                modifier = Modifier.padding(start = 16.dp, bottom = 4.dp)
+                            )
+                        }
+                    }
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                }
+            } else {
+                sortedResults.forEach { result ->
+                    val player = players.find { it.id == result.playerId }
+                    val playerAllResults = allResults.filter { it.playerId == result.playerId }
+                    val avgDelta = if (isSurvivalMode || playerAllResults.isEmpty()) null
+                        else playerAllResults.map { kotlin.math.abs(it.delta) }.average()
+                    val absDelta = kotlin.math.abs(result.delta)
+                    val roast = remember(result.playerId) { if (!isSurvivalMode && absDelta > 2.0) RoastMessages.random(result.targetTime, absDelta) else null }
+                    PlayerResultRow(
+                        playerName = player?.name ?: "Unknown",
+                        playerTime = result.playerTime,
+                        delta = result.delta,
+                        avgDelta = avgDelta,
+                        isRoundWinner = minAbsDelta != null && kotlin.math.abs(result.delta) == minAbsDelta,
+                        isEliminated = (isSurvivalMode || isTimeBankMode) && player?.eliminated == true
                     )
+                    if (roast != null) {
+                        Text(
+                            text = roast,
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.Bold),
+                            color = AccentRed,
+                            modifier = Modifier.padding(bottom = 4.dp)
+                        )
+                    }
+                    if (isTimeBankMode && player != null && !player.eliminated) {
+                        Text(
+                            text = "Bank: %.2fs remaining".format(player.bank),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = if (player.bank < 0.3) AccentRed else AccentGreen
+                        )
+                    }
                 }
             }
         }
 
-        if (onReady != null) {
+        if (onReady != null && !isGameOver) {
             Text(
                 text = "Ready: $readyCount / ${players.size}",
                 style = MaterialTheme.typography.bodyLarge,
                 color = if (allReady) AccentGreen else MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.padding(top = 16.dp)
+                modifier = Modifier.padding(top = 8.dp)
             )
         }
 
         Column(
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            if (onReady != null) {
-                // Online mode: ready-up flow
+            if (onReady != null && !isGameOver) {
                 if (!localReady) {
                     Button(
                         onClick = {
@@ -107,9 +183,8 @@ fun ResultsScreen(
                     )
                 }
             } else {
-                // Local mode: host advances directly
                 Button(onClick = onNextRound, modifier = Modifier.fillMaxWidth()) {
-                    Text("Next Round")
+                    Text(if (isGameOver) "See Winner" else "Next Round")
                 }
             }
 

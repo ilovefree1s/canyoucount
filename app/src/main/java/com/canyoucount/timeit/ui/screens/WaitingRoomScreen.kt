@@ -2,25 +2,35 @@ package com.canyoucount.timeit.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.canyoucount.timeit.data.model.Player
+import com.canyoucount.timeit.ui.theme.AccentGreen
 import com.canyoucount.timeit.ui.theme.SandAmber
+
+private val TEAM_LABELS = listOf("A", "B", "C", "D")
 
 @Composable
 fun WaitingRoomScreen(
     roomCode: String,
     players: List<Player>,
     isHost: Boolean,
+    isTeamMode: Boolean = false,
+    teamCount: Int = 2,
+    onAssignTeam: ((playerId: String, teamId: Int) -> Unit)? = null,
     onStartGame: () -> Unit
 ) {
     Column(
@@ -31,20 +41,68 @@ fun WaitingRoomScreen(
         Text(text = roomCode, style = MaterialTheme.typography.displayLarge, color = SandAmber)
 
         Text(text = "Players (${players.size})", style = MaterialTheme.typography.headlineMedium)
-        LazyColumn {
+
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             items(players) { player ->
-                Text(text = player.name, style = MaterialTheme.typography.bodyLarge)
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = player.name,
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                        if (isTeamMode && player.teamId != 0) {
+                            Text(
+                                text = "Team ${TEAM_LABELS.getOrElse(player.teamId - 1) { "?" }}",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                color = AccentGreen
+                            )
+                        }
+                    }
+                    if (isTeamMode && isHost && onAssignTeam != null) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                "Team:",
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.align(Alignment.CenterVertically),
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                            )
+                            (1..teamCount).forEach { teamId ->
+                                FilterChip(
+                                    selected = player.teamId == teamId,
+                                    onClick = { onAssignTeam(player.id, teamId) },
+                                    label = { Text(TEAM_LABELS[teamId - 1], fontWeight = FontWeight.Bold) }
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
 
-        if (isHost) {
+        if (isTeamMode && isHost) {
+            val teamsValid = (1..teamCount).all { id -> players.any { it.teamId == id } }
+            if (!teamsValid) {
+                Text(
+                    text = "Assign at least one player to each team before starting.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+            Button(
+                onClick = onStartGame,
+                enabled = players.size >= 2 && teamsValid,
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Start Game") }
+        } else if (isHost) {
             Button(
                 onClick = onStartGame,
                 enabled = players.size >= 2,
                 modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Start Game")
-            }
+            ) { Text("Start Game") }
         } else {
             Text(text = "Waiting for host to start…", style = MaterialTheme.typography.bodyLarge)
         }

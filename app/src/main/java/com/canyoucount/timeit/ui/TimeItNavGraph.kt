@@ -21,12 +21,14 @@ import com.canyoucount.timeit.ui.screens.JoinRoomScreen
 import com.canyoucount.timeit.ui.screens.LobbyScreen
 import com.canyoucount.timeit.ui.screens.OnlineMenuScreen
 import com.canyoucount.timeit.ui.screens.ResultsScreen
+import com.canyoucount.timeit.ui.screens.LocalMultiScreen
 import com.canyoucount.timeit.ui.screens.SinglePlayerScreen
 import com.canyoucount.timeit.ui.screens.WaitingRoomScreen
 import com.canyoucount.timeit.ui.screens.WinnerScreen
 import com.canyoucount.timeit.util.PlayerNameStore
 import com.canyoucount.timeit.viewmodel.GamePhase
 import com.canyoucount.timeit.viewmodel.GameViewModel
+import com.canyoucount.timeit.viewmodel.LocalMultiPlayerViewModel
 import com.canyoucount.timeit.viewmodel.OnlineGameViewModel
 import com.canyoucount.timeit.viewmodel.SinglePlayerViewModel
 import kotlinx.coroutines.launch
@@ -45,13 +47,21 @@ private object Routes {
     const val GAME_ONLINE = "game_online"
     const val RESULTS_ONLINE = "results_online"
     const val WINNER_ONLINE = "winner_online"
+    const val LOCAL_MULTI = "local_multi"
+    const val CHRONOS_LOCAL = "chronos_local"
+    const val CHRONOS_ONLINE = "chronos_online"
 }
 
 @Composable
-fun TimeItNavGraph(navController: NavHostController = rememberNavController()) {
+fun TimeItNavGraph(
+    navController: NavHostController = rememberNavController(),
+    isMuted: Boolean = false,
+    onToggleMute: () -> Unit = {}
+) {
     val gameViewModel: GameViewModel = viewModel()
     val onlineViewModel: OnlineGameViewModel = viewModel()
     val singlePlayerViewModel: SinglePlayerViewModel = viewModel()
+    val localMultiViewModel: LocalMultiPlayerViewModel = viewModel()
 
     NavHost(navController = navController, startDestination = Routes.HOME) {
 
@@ -62,7 +72,13 @@ fun TimeItNavGraph(navController: NavHostController = rememberNavController()) {
                     navController.navigate(Routes.SINGLE_PLAYER)
                 },
                 onPassAndPlay = { navController.navigate(Routes.LOBBY) },
-                onPlayOnline = { navController.navigate(Routes.ONLINE_MENU) }
+                onLocalMultiplayer = {
+                    localMultiViewModel.restart()
+                    navController.navigate(Routes.LOCAL_MULTI)
+                },
+                onPlayOnline = { navController.navigate(Routes.ONLINE_MENU) },
+                isMuted = isMuted,
+                onToggleMute = onToggleMute
             )
         }
 
@@ -75,9 +91,18 @@ fun TimeItNavGraph(navController: NavHostController = rememberNavController()) {
             )
         }
 
+        composable(Routes.LOCAL_MULTI) {
+            LocalMultiScreen(
+                viewModel = localMultiViewModel,
+                onHome = {
+                    navController.navigate(Routes.HOME) { popUpTo(Routes.HOME) { inclusive = true } }
+                }
+            )
+        }
+
         composable(Routes.LOBBY) {
-            LobbyScreen(onStartGame = { names, config ->
-                gameViewModel.startGame(names, config)
+            LobbyScreen(onStartGame = { pairs, config ->
+                gameViewModel.startGame(pairs, config)
                 navController.navigate(Routes.GAME_LOCAL)
             })
         }
@@ -86,9 +111,11 @@ fun TimeItNavGraph(navController: NavHostController = rememberNavController()) {
             GameScreen(
                 viewModel = gameViewModel,
                 onRoundFinished = {
-                    val phase = gameViewModel.phase.value
-                    val destination = if (phase == GamePhase.Winner) Routes.WINNER_LOCAL else Routes.RESULTS_LOCAL
-                    navController.navigate(destination) { popUpTo(Routes.GAME_LOCAL) { inclusive = true } }
+                    if (gameViewModel.chronosPlayerName.value != null) {
+                        navController.navigate(Routes.CHRONOS_LOCAL) { popUpTo(Routes.GAME_LOCAL) { inclusive = true } }
+                    } else {
+                        navController.navigate(Routes.RESULTS_LOCAL) { popUpTo(Routes.GAME_LOCAL) { inclusive = true } }
+                    }
                 }
             )
         }
@@ -96,15 +123,23 @@ fun TimeItNavGraph(navController: NavHostController = rememberNavController()) {
         composable(Routes.RESULTS_LOCAL) {
             val state by gameViewModel.gameState.collectAsState()
             val results by gameViewModel.lastRoundResults.collectAsState()
+            val isOver by gameViewModel.isGameOver.collectAsState()
             ResultsScreen(
                 players = state.players,
                 roundResults = results,
                 allResults = state.results,
                 isHost = true,
                 isTimeBankMode = state.config.gameMode == "timebank",
+                isSurvivalMode = state.config.gameMode == "survival",
+                isTeamMode = state.config.isTeamMode,
+                isGameOver = isOver,
                 onNextRound = {
-                    gameViewModel.startNextRound()
-                    navController.navigate(Routes.GAME_LOCAL) { popUpTo(Routes.RESULTS_LOCAL) { inclusive = true } }
+                    if (isOver) {
+                        navController.navigate(Routes.WINNER_LOCAL) { popUpTo(Routes.RESULTS_LOCAL) { inclusive = true } }
+                    } else {
+                        gameViewModel.startNextRound()
+                        navController.navigate(Routes.GAME_LOCAL) { popUpTo(Routes.RESULTS_LOCAL) { inclusive = true } }
+                    }
                 },
                 onEndGame = {
                     navController.navigate(Routes.HOME) { popUpTo(Routes.HOME) { inclusive = true } }
@@ -114,31 +149,90 @@ fun TimeItNavGraph(navController: NavHostController = rememberNavController()) {
 
         composable(Routes.WINNER_LOCAL) {
             val state by gameViewModel.gameState.collectAsState()
-            val winner = if (state.config.gameMode == "timebank") {
-                state.players.filter { !it.eliminated }.maxByOrNull { it.bank }
-                    ?: state.players.maxByOrNull { it.bank }
-            } else {
-                // Standard: lowest average absolute delta across all rounds
-                state.players.minByOrNull { player ->
-                    val playerResults = state.results.filter { it.playerId == player.id }
-                    if (playerResults.isEmpty()) Double.MAX_VALUE
-                    else playerResults.map { kotlin.math.abs(it.delta) }.average()
+            val lastRoundResults by gameViewModel.lastRoundResults.collectAsState()
+            val isTimeBankMode = state.config.gameMode == "timebank"
+            val isSurvivalMode = state.config.gameMode == "survival"
+            val isTeamMode = state.config.isTeamMode
+            val teamLabels = listOf("A", "B", "C", "D")
+
+            val winnerName: String
+            val winnerAvgDelta: Double?
+            val winningTeamId: Int?
+
+            if (isTeamMode) {
+                val teamIds = state.players.map { it.teamId }.distinct()
+                val bestTeamId = when {
+                    isTimeBankMode -> teamIds.maxByOrNull { tid ->
+                        state.players.filter { it.teamId == tid && !it.eliminated }.maxOfOrNull { it.bank } ?: -1.0
+                    }
+                    else -> teamIds.maxByOrNull { tid ->
+                        state.players.filter { it.teamId == tid }.map { it.wins }.average().takeIf { it.isFinite() } ?: -1.0
+                    }
                 }
+                winningTeamId = bestTeamId
+                winnerName = "Team ${teamLabels.getOrElse((bestTeamId ?: 1) - 1) { "?" }}"
+                winnerAvgDelta = null
+            } else {
+                winningTeamId = null
+                val winner = when {
+                    isTimeBankMode || isSurvivalMode ->
+                        state.players.filter { !it.eliminated }.firstOrNull() ?: state.players.firstOrNull()
+                    else -> state.players.minByOrNull { player ->
+                        val r = state.results.filter { it.playerId == player.id }
+                        if (r.isEmpty()) Double.MAX_VALUE else r.map { kotlin.math.abs(it.delta) }.average()
+                    }
+                }
+                winnerName = winner?.name ?: ""
+                winnerAvgDelta = if (!isTimeBankMode && winner != null) {
+                    val r = state.results.filter { it.playerId == winner.id }
+                    if (r.isEmpty()) null else r.map { kotlin.math.abs(it.delta) }.average()
+                } else null
             }
-            val winnerAvgDelta = if (state.config.gameMode == "standard" && winner != null) {
-                val playerResults = state.results.filter { it.playerId == winner.id }
-                if (playerResults.isEmpty()) null
-                else playerResults.map { kotlin.math.abs(it.delta) }.average()
-            } else null
+
             WinnerScreen(
-                winnerName = winner?.name ?: "",
+                winnerName = winnerName,
                 winnerAvgDelta = winnerAvgDelta,
-                onPlayAgain = {
+                players = state.players,
+                allResults = state.results,
+                roundResults = lastRoundResults,
+                isTimeBankMode = isTimeBankMode,
+                isSurvivalMode = isSurvivalMode,
+                isTeamMode = isTeamMode,
+                winningTeamId = winningTeamId,
+                onRematch = {
                     gameViewModel.playAgain()
                     navController.navigate(Routes.GAME_LOCAL) { popUpTo(Routes.WINNER_LOCAL) { inclusive = true } }
                 },
                 onHome = {
                     navController.navigate(Routes.HOME) { popUpTo(Routes.HOME) { inclusive = true } }
+                }
+            )
+        }
+
+        composable(Routes.CHRONOS_LOCAL) {
+            val state by gameViewModel.gameState.collectAsState()
+            val results by gameViewModel.lastRoundResults.collectAsState()
+            val chronosName by gameViewModel.chronosPlayerName.collectAsState()
+            ChronosScreen(
+                chronosPlayerName = chronosName ?: "",
+                roundResults = results,
+                players = state.players,
+                onSeeWinner = {
+                    navController.navigate(Routes.WINNER_LOCAL) { popUpTo(Routes.CHRONOS_LOCAL) { inclusive = true } }
+                }
+            )
+        }
+
+        composable(Routes.CHRONOS_ONLINE) {
+            val players by onlineViewModel.players.collectAsState()
+            val results by onlineViewModel.lastRoundResults.collectAsState()
+            val chronosName by onlineViewModel.chronosPlayerName.collectAsState()
+            ChronosScreen(
+                chronosPlayerName = chronosName ?: "",
+                roundResults = results,
+                players = players,
+                onSeeWinner = {
+                    navController.navigate(Routes.WINNER_ONLINE) { popUpTo(Routes.CHRONOS_ONLINE) { inclusive = true } }
                 }
             )
         }
@@ -160,9 +254,9 @@ fun TimeItNavGraph(navController: NavHostController = rememberNavController()) {
                 playerName = hostName,
                 onPlayerNameChange = { hostName = it },
                 errorMessage = error,
-                onHost = { winTarget, gameMode, timeBankSeconds ->
+                onHost = { winTarget, gameMode, timeBankSeconds, isTeamMode, teamCount ->
                     scope.launch { PlayerNameStore.saveName(context, hostName) }
-                    onlineViewModel.hostGame(hostName, GameConfig(winTarget = winTarget, gameMode = gameMode, timeBankSeconds = timeBankSeconds))
+                    onlineViewModel.hostGame(hostName, GameConfig(winTarget = winTarget, gameMode = gameMode, timeBankSeconds = timeBankSeconds, isTeamMode = isTeamMode, teamCount = teamCount))
                     navController.navigate(Routes.WAITING_ROOM) { popUpTo(Routes.ONLINE_MENU) }
                 }
             )
@@ -197,10 +291,14 @@ fun TimeItNavGraph(navController: NavHostController = rememberNavController()) {
                     navController.navigate(Routes.GAME_ONLINE) { popUpTo(Routes.WAITING_ROOM) { inclusive = true } }
                 }
             }
+            val onlineConfig = onlineViewModel.gameConfig
             WaitingRoomScreen(
                 roomCode = code,
                 players = players,
                 isHost = isHost,
+                isTeamMode = onlineConfig.isTeamMode,
+                teamCount = onlineConfig.teamCount,
+                onAssignTeam = { playerId, teamId -> onlineViewModel.updatePlayerTeam(playerId, teamId) },
                 onStartGame = { onlineViewModel.startRound() }
             )
         }
@@ -217,9 +315,10 @@ fun TimeItNavGraph(navController: NavHostController = rememberNavController()) {
                 onTap = onlineViewModel::onPlayerTap
             )
             LaunchedEffect(phase) {
-                if (phase == GamePhase.Results || phase == GamePhase.Winner) {
-                    val destination = if (phase == GamePhase.Winner) Routes.WINNER_ONLINE else Routes.RESULTS_ONLINE
-                    navController.navigate(destination) { popUpTo(Routes.GAME_ONLINE) { inclusive = true } }
+                when (phase) {
+                    GamePhase.Chronos -> navController.navigate(Routes.CHRONOS_ONLINE) { popUpTo(Routes.GAME_ONLINE) { inclusive = true } }
+                    GamePhase.Results, GamePhase.Winner -> navController.navigate(Routes.RESULTS_ONLINE) { popUpTo(Routes.GAME_ONLINE) { inclusive = true } }
+                    else -> {}
                 }
             }
         }
@@ -229,6 +328,7 @@ fun TimeItNavGraph(navController: NavHostController = rememberNavController()) {
             val results by onlineViewModel.lastRoundResults.collectAsState()
             val isHost by onlineViewModel.isHost.collectAsState()
             val phase by onlineViewModel.phase.collectAsState()
+            val isGameOver by onlineViewModel.isGameOver.collectAsState()
             val allReady = players.isNotEmpty() && players.all { it.ready }
             LaunchedEffect(phase) {
                 if (phase == GamePhase.TargetReveal) {
@@ -237,7 +337,11 @@ fun TimeItNavGraph(navController: NavHostController = rememberNavController()) {
             }
             LaunchedEffect(allReady) {
                 if (allReady && isHost) {
-                    onlineViewModel.nextRound()
+                    if (isGameOver) {
+                        navController.navigate(Routes.WINNER_ONLINE) { popUpTo(Routes.RESULTS_ONLINE) { inclusive = true } }
+                    } else {
+                        onlineViewModel.nextRound()
+                    }
                 }
             }
             val gameMode by onlineViewModel.gameMode.collectAsState()
@@ -246,8 +350,17 @@ fun TimeItNavGraph(navController: NavHostController = rememberNavController()) {
                 roundResults = results,
                 isHost = isHost,
                 isTimeBankMode = gameMode == "timebank",
+                isSurvivalMode = gameMode == "survival",
+                isTeamMode = onlineViewModel.gameConfig.isTeamMode,
+                isGameOver = isGameOver,
                 onReady = onlineViewModel::markReady,
-                onNextRound = { onlineViewModel.nextRound() },
+                onNextRound = {
+                    if (isGameOver) {
+                        navController.navigate(Routes.WINNER_ONLINE) { popUpTo(Routes.RESULTS_ONLINE) { inclusive = true } }
+                    } else {
+                        onlineViewModel.nextRound()
+                    }
+                },
                 onEndGame = {
                     navController.navigate(Routes.HOME) { popUpTo(Routes.HOME) { inclusive = true } }
                 }
@@ -256,13 +369,72 @@ fun TimeItNavGraph(navController: NavHostController = rememberNavController()) {
 
         composable(Routes.WINNER_ONLINE) {
             val players by onlineViewModel.players.collectAsState()
-            val winner = players.maxByOrNull { it.wins }
+            val gameMode by onlineViewModel.gameMode.collectAsState()
+            val lastRoundResults by onlineViewModel.lastRoundResults.collectAsState()
+            val isHost by onlineViewModel.isHost.collectAsState()
+            val phase by onlineViewModel.phase.collectAsState()
+            val isTimeBankMode = gameMode == "timebank"
+            val isSurvivalMode = gameMode == "survival"
+            val isTeamMode = onlineViewModel.gameConfig.isTeamMode
+            val teamLabels = listOf("A", "B", "C", "D")
+            var localVoted by remember { mutableStateOf(false) }
+            val rematchVoteCount = players.count { it.ready }
+            val allReady = players.isNotEmpty() && players.all { it.ready }
+
+            LaunchedEffect(allReady) {
+                if (allReady && isHost) {
+                    onlineViewModel.restartGame()
+                }
+            }
+            LaunchedEffect(phase) {
+                if (phase == GamePhase.TargetReveal) {
+                    localVoted = false
+                    navController.navigate(Routes.GAME_ONLINE) { popUpTo(Routes.WINNER_ONLINE) { inclusive = true } }
+                }
+            }
+
+            val winnerName: String
+            val winningTeamId: Int?
+
+            if (isTeamMode) {
+                val teamIds = players.map { it.teamId }.distinct()
+                val bestTeamId = when {
+                    isTimeBankMode -> teamIds.maxByOrNull { tid ->
+                        players.filter { it.teamId == tid && !it.eliminated }.maxOfOrNull { it.bank } ?: -1.0
+                    }
+                    else -> teamIds.maxByOrNull { tid ->
+                        players.filter { it.teamId == tid }.map { it.wins }.average().takeIf { it.isFinite() } ?: -1.0
+                    }
+                }
+                winningTeamId = bestTeamId
+                winnerName = "Team ${teamLabels.getOrElse((bestTeamId ?: 1) - 1) { "?" }}"
+            } else {
+                winningTeamId = null
+                val winner = when {
+                    isTimeBankMode -> players.filter { !it.eliminated }.maxByOrNull { it.bank } ?: players.maxByOrNull { it.bank }
+                    isSurvivalMode -> players.filter { !it.eliminated }.firstOrNull() ?: players.firstOrNull()
+                    else -> players.maxByOrNull { it.wins }
+                }
+                winnerName = winner?.name ?: ""
+            }
+
             WinnerScreen(
-                winnerName = winner?.name ?: "",
-                onPlayAgain = {
-                    navController.navigate(Routes.ONLINE_MENU) { popUpTo(Routes.HOME) }
+                winnerName = winnerName,
+                players = players,
+                roundResults = lastRoundResults,
+                isTimeBankMode = isTimeBankMode,
+                isSurvivalMode = isSurvivalMode,
+                isTeamMode = isTeamMode,
+                winningTeamId = winningTeamId,
+                onRematch = {
+                    localVoted = true
+                    onlineViewModel.markReady()
                 },
+                rematchVoteCount = rematchVoteCount,
+                totalPlayers = players.size,
+                hasVotedRematch = localVoted,
                 onHome = {
+                    onlineViewModel.reset()
                     navController.navigate(Routes.HOME) { popUpTo(Routes.HOME) { inclusive = true } }
                 }
             )

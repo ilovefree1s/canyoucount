@@ -17,6 +17,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.canyoucount.timeit.ui.components.CountdownDisplay
+import com.canyoucount.timeit.ui.theme.AccentRed
 import com.canyoucount.timeit.viewmodel.GamePhase
 import com.canyoucount.timeit.viewmodel.GameViewModel
 import kotlinx.coroutines.delay
@@ -36,25 +37,32 @@ fun GameScreen(
     val currentPlayerIndex by viewModel.currentPlayerIndex.collectAsState()
 
     LaunchedEffect(phase) {
-        if (phase == GamePhase.Results || phase == GamePhase.Winner) {
+        if (phase == GamePhase.Results || phase == GamePhase.Winner || phase == GamePhase.Chronos) {
             onRoundFinished()
         }
     }
 
-    val currentPlayerName = gameState.players.getOrNull(currentPlayerIndex)?.name ?: ""
+    val currentPlayer = gameState.players.getOrNull(currentPlayerIndex)
+    val currentPlayerName = currentPlayer?.name ?: ""
+    val isEliminated = currentPlayer?.eliminated == true
+    val isSurvivalMode = gameState.config.gameMode == "survival"
 
     Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         when (phase) {
             GamePhase.TargetReveal -> TargetRevealContent(
                 targetTime = targetTime,
                 playerName = currentPlayerName,
+                isEliminated = isSurvivalMode && isEliminated,
                 onFinished = viewModel::onTargetRevealFinished
             )
             GamePhase.Countdown -> CountdownDisplay(
                 onGo = viewModel::onCountdownGo,
                 onFinished = viewModel::onCountdownFinished
             )
-            GamePhase.Tapping -> TappingContent(onTap = viewModel::onPlayerTap)
+            GamePhase.Tapping -> TappingContent(
+                isEliminated = isSurvivalMode && isEliminated,
+                onTap = viewModel::onPlayerTap
+            )
             else -> Unit
         }
     }
@@ -64,6 +72,7 @@ fun GameScreen(
 private fun TargetRevealContent(
     targetTime: Double,
     playerName: String,
+    isEliminated: Boolean = false,
     onFinished: () -> Unit
 ) {
     LaunchedEffect(targetTime, playerName) {
@@ -78,6 +87,14 @@ private fun TargetRevealContent(
         if (playerName.isNotBlank()) {
             Text(text = "$playerName's turn", style = MaterialTheme.typography.headlineMedium)
         }
+        if (isEliminated) {
+            Text(
+                text = "💀 Eliminated",
+                style = MaterialTheme.typography.titleMedium,
+                color = AccentRed,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+        }
         Text(
             text = "%.2f".format(targetTime),
             style = MaterialTheme.typography.displayLarge,
@@ -88,16 +105,33 @@ private fun TargetRevealContent(
 }
 
 @Composable
-private fun TappingContent(onTap: () -> Unit) {
+private fun TappingContent(
+    isEliminated: Boolean = false,
+    onTap: () -> Unit
+) {
     Column(
         modifier = Modifier.fillMaxSize().clickable { onTap() },
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Text(
-            text = "Tap anywhere to stop",
-            style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.padding(top = 32.dp)
-        )
+        if (isEliminated) {
+            Text(
+                text = "💀 Eliminated",
+                style = MaterialTheme.typography.headlineMedium,
+                color = AccentRed
+            )
+            Text(
+                text = "Tap anyway",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                modifier = Modifier.padding(top = 8.dp)
+            )
+        } else {
+            Text(
+                text = "Tap anywhere to stop",
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.padding(top = 32.dp)
+            )
+        }
     }
 }

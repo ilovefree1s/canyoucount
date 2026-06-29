@@ -42,7 +42,7 @@ fun JoinRoomScreen(
 
         OutlinedTextField(
             value = roomCode,
-            onValueChange = { roomCode = it.uppercase().take(6) },
+            onValueChange = { roomCode = it.take(6) },
             label = { Text("Room code") },
             modifier = Modifier.fillMaxWidth()
         )

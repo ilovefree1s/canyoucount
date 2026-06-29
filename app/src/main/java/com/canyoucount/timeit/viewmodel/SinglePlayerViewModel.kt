@@ -1,18 +1,24 @@
 package com.canyoucount.timeit.viewmodel
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import com.canyoucount.timeit.data.model.GameConfig
 import com.canyoucount.timeit.data.model.RoundResult
+import com.canyoucount.timeit.util.SoloLeaderboardStore
+import com.canyoucount.timeit.util.SoloScoreEntry
 import com.canyoucount.timeit.util.TimerUtil
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 import kotlin.random.Random
 
-class SinglePlayerViewModel : ViewModel() {
+class SinglePlayerViewModel(app: Application) : AndroidViewModel(app) {
 
     private val config = GameConfig()
-    private val totalRounds = 3
-    private val timeBankStart = 1.0
+    private var totalRounds = 3
+    val getTotalRounds: Int get() = totalRounds
+    private var timeBankStart = 1.0
 
     private val _phase = MutableStateFlow<GamePhase>(GamePhase.Setup)
     val phase: StateFlow<GamePhase> = _phase
@@ -32,7 +38,7 @@ class SinglePlayerViewModel : ViewModel() {
     private val _allResults = MutableStateFlow<List<RoundResult>>(emptyList())
     val allResults: StateFlow<List<RoundResult>> = _allResults
 
-    private val _bank = MutableStateFlow(timeBankStart)
+    private val _bank = MutableStateFlow(1.0)
     val bank: StateFlow<Double> = _bank
 
     private var tapStartNanos: Long = 0L
@@ -41,8 +47,10 @@ class SinglePlayerViewModel : ViewModel() {
         _targetTime.value = TimerUtil.round2(Random.nextDouble(config.minTime, config.maxTime))
     }
 
-    fun startGame(mode: String, bankSeconds: Double = timeBankStart) {
+    fun startGame(mode: String, bankSeconds: Double = 1.0, rounds: Int = 3) {
         _gameMode.value = mode
+        totalRounds = rounds
+        timeBankStart = bankSeconds
         _currentRound.value = 1
         _allResults.value = emptyList()
         _lastResult.value = null
@@ -51,17 +59,9 @@ class SinglePlayerViewModel : ViewModel() {
         _phase.value = GamePhase.TargetReveal
     }
 
-    fun onTargetRevealFinished() {
-        _phase.value = GamePhase.Countdown
-    }
-
-    fun onCountdownGo() {
-        tapStartNanos = TimerUtil.now()
-    }
-
-    fun onCountdownFinished() {
-        _phase.value = GamePhase.Tapping
-    }
+    fun onTargetRevealFinished() { _phase.value = GamePhase.Countdown }
+    fun onCountdownGo() { tapStartNanos = TimerUtil.now() }
+    fun onCountdownFinished() { _phase.value = GamePhase.Tapping }
 
     fun onTap() {
         val elapsed = TimerUtil.round2(TimerUtil.elapsedSeconds(tapStartNanos))
@@ -78,6 +78,7 @@ class SinglePlayerViewModel : ViewModel() {
             val newBank = TimerUtil.round2(_bank.value - kotlin.math.abs(result.delta))
             _bank.value = newBank
             if (newBank <= 0.0) {
+                saveTimeBankScore()
                 _phase.value = GamePhase.GameOver
                 return
             }
@@ -87,7 +88,9 @@ class SinglePlayerViewModel : ViewModel() {
     }
 
     fun onNextRound() {
-        if (_gameMode.value == "standard" && _currentRound.value >= totalRounds) {
+        val isLast = _currentRound.value >= totalRounds
+        if (_gameMode.value == "standard" && isLast) {
+            saveStandardScore()
             _phase.value = GamePhase.Results
         } else {
             _currentRound.value++
@@ -96,7 +99,35 @@ class SinglePlayerViewModel : ViewModel() {
         }
     }
 
-    fun restart() {
-        _phase.value = GamePhase.Setup
+    private fun saveStandardScore() {
+        val results = _allResults.value
+        if (results.isEmpty()) return
+        val avg = results.map { kotlin.math.abs(it.delta) }.average()
+        val entry = SoloScoreEntry(
+            mode = "standard",
+            avgError = TimerUtil.round2(avg),
+            rounds = totalRounds,
+            startBank = 0.0
+        )
+        viewModelScope.launch {
+            SoloLeaderboardStore.saveStandardScore(getApplication(), entry)
+        }
     }
+
+    private fun saveTimeBankScore() {
+        val results = _allResults.value
+        val survived = (results.size - 1).coerceAtLeast(0)
+        val avg = if (results.isEmpty()) 0.0 else results.map { kotlin.math.abs(it.delta) }.average()
+        val entry = SoloScoreEntry(
+            mode = "timebank",
+            avgError = TimerUtil.round2(avg),
+            rounds = survived,
+            startBank = timeBankStart
+        )
+        viewModelScope.launch {
+            SoloLeaderboardStore.saveTimeBankScore(getApplication(), entry)
+        }
+    }
+
+    fun restart() { _phase.value = GamePhase.Setup }
 }

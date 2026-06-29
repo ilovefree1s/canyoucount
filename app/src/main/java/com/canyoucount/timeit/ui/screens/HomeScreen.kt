@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -19,7 +20,10 @@ import androidx.compose.ui.unit.dp
 fun HomeScreen(
     onSinglePlayer: () -> Unit,
     onPassAndPlay: () -> Unit,
-    onPlayOnline: () -> Unit
+    onLocalMultiplayer: () -> Unit,
+    onPlayOnline: () -> Unit,
+    isMuted: Boolean = false,
+    onToggleMute: () -> Unit = {}
 ) {
     BoxWithConstraints(
         modifier = Modifier.fillMaxSize().padding(32.dp),
@@ -43,13 +47,26 @@ fun HomeScreen(
         ) {
             Button(onClick = onSinglePlayer, modifier = Modifier.fillMaxWidth()) { Text("Solo") }
             Button(onClick = onPassAndPlay, modifier = Modifier.fillMaxWidth()) { Text("Pass and Play") }
+            Button(onClick = onLocalMultiplayer, modifier = Modifier.fillMaxWidth()) { Text("Screen Share") }
             Button(onClick = onPlayOnline, modifier = Modifier.fillMaxWidth()) { Text("Play Online") }
         }
 
-        Text(
-            text = "created by Justin Hamilton",
-            style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.align(Alignment.BottomCenter)
-        )
+        Column(
+            modifier = Modifier.align(Alignment.BottomCenter),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            TextButton(onClick = onToggleMute) {
+                Text(
+                    text = if (isMuted) "🔇 Unmute Music" else "🔊 Mute Music",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                )
+            }
+            Text(
+                text = "created by Justin Hamilton",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+            )
+        }
     }
 }

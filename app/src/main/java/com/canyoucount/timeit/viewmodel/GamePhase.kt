@@ -10,5 +10,6 @@ enum class GamePhase {
     RoundResult,
     Results,
     Winner,
-    GameOver
+    GameOver,
+    Chronos
 }

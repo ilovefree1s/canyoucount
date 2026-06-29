@@ -23,25 +23,33 @@ fun PlayerResultRow(
     delta: Double,
     avgDelta: Double? = null,
     isRoundWinner: Boolean,
+    isEliminated: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val absDelta = kotlin.math.abs(delta)
     val isGodOfTime = absDelta <= 0.1
     val isKeeperOfTime = !isGodOfTime && absDelta <= 0.2
     val isTimeWizard = !isGodOfTime && !isKeeperOfTime && absDelta <= 0.3
-    val isNiceTryBaby = absDelta >= 2.0
-    val isNiceTryGrandpa = !isNiceTryBaby && absDelta >= 1.0
 
     Column(modifier = modifier.fillMaxWidth().padding(vertical = 8.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text(
-                text = if (isRoundWinner) "★ $playerName" else playerName,
-                style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold),
-                color = if (isRoundWinner) AccentGreen else MaterialTheme.colorScheme.onSurface
-            )
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    text = if (isRoundWinner) "★ $playerName" else playerName,
+                    style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold),
+                    color = if (isRoundWinner) AccentGreen else MaterialTheme.colorScheme.onSurface
+                )
+                if (isEliminated) {
+                    Text(
+                        text = "💀 ELIMINATED",
+                        style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold),
+                        color = AccentRed
+                    )
+                }
+            }
             if (avgDelta != null) {
                 Text(
                     text = "Avg: %.2fs".format(avgDelta),
@@ -62,7 +70,7 @@ fun PlayerResultRow(
             Text(
                 text = "%+.2fs".format(delta),
                 style = MaterialTheme.typography.headlineSmall,
-                color = if (absDelta <= 0.3) AccentGreen else if (absDelta >= 1.0) AccentRed else MaterialTheme.colorScheme.onSurface
+                color = if (absDelta > 1.0) AccentRed else AccentGreen
             )
         }
         if (isGodOfTime) {
@@ -91,24 +99,6 @@ fun PlayerResultRow(
                     fontSize = 18.sp
                 ),
                 color = SandAmber
-            )
-        } else if (isNiceTryGrandpa) {
-            Text(
-                text = "👴 Nice try grandpa!",
-                style = MaterialTheme.typography.bodyLarge.copy(
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 18.sp
-                ),
-                color = AccentRed
-            )
-        } else if (isNiceTryBaby) {
-            Text(
-                text = "👶 Nice try lil baby!",
-                style = MaterialTheme.typography.bodyLarge.copy(
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 18.sp
-                ),
-                color = AccentRed
             )
         }
     }
